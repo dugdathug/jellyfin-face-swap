@@ -185,20 +185,37 @@ def upload_image(item_id: str, image_type: str, image_bytes: bytes) -> None:
     image_path = api_paths.get(image_type, image_type)
 
     # Backdrops: DELETE first, otherwise Jellyfin appends (creates backdrop1.jpg)
+    # If upload fails after delete, restore the original from backup
+    deleted_backdrop = False
     if image_path == "Backdrop/0":
+        # Download current backdrop as safety net before deleting
+        current = download_image(item_id, "Backdrop/0")
         requests.delete(
             _url(f"/Items/{item_id}/Images/Backdrop/0"),
             headers=_headers(),
             timeout=180,
         )
+        deleted_backdrop = True
 
     headers = _headers()
     headers["Content-Type"] = "image/jpeg"
     body = base64.b64encode(image_bytes).decode()
-    r = requests.post(
-        _url(f"/Items/{item_id}/Images/{image_path}"),
-        headers=headers,
-        data=body,
-        timeout=180,
-    )
-    r.raise_for_status()
+    try:
+        r = requests.post(
+            _url(f"/Items/{item_id}/Images/{image_path}"),
+            headers=headers,
+            data=body,
+            timeout=180,
+        )
+        r.raise_for_status()
+    except Exception:
+        # Upload failed — restore the original if we deleted the backdrop
+        if deleted_backdrop and current:
+            restore_body = base64.b64encode(current).decode()
+            requests.post(
+                _url(f"/Items/{item_id}/Images/Backdrop/0"),
+                headers={**_headers(), "Content-Type": "image/jpeg"},
+                data=restore_body,
+                timeout=180,
+            )
+        raise

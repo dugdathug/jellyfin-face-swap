@@ -62,6 +62,9 @@ class Settings(BaseModel):
     analysis_backend: str = Field(default="gemini", pattern=r"^(gemini|claude)$")
     swap_backend: str = Field(default="gemini", pattern=r"^(gemini|fal)$")
 
+    # Authentication (optional — if not set, no auth required)
+    auth_token: str = ""
+
     # Server
     host: str = "0.0.0.0"
     port: int = 8000
@@ -111,6 +114,7 @@ def load_settings() -> Settings:
         gemini_api_key=get("GEMINI_API_KEY"),
         anthropic_api_key=get("ANTHROPIC_API_KEY"),
         fal_key=get("FAL_KEY"),
+        auth_token=get("AUTH_TOKEN"),
         analysis_backend=get("ANALYSIS_BACKEND", "gemini"),
         swap_backend=get("SWAP_BACKEND", "gemini"),
         host=get("HOST", "0.0.0.0"),

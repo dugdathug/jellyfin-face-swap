@@ -18,8 +18,13 @@ _CACHE_HEADERS = {"Cache-Control": "public, max-age=3600, must-revalidate"}
 _EMPTY_PNG = b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82'
 
 
+MAX_IMAGE_SIZE = 50 * 1024 * 1024  # 50MB
+
+
 def _cached_image_response(request: Request, image_bytes: bytes) -> Response:
     """Return image with cache headers and ETag support."""
+    if len(image_bytes) > MAX_IMAGE_SIZE:
+        raise HTTPException(status_code=413, detail="Image too large")
     etag = hashlib.md5(image_bytes).hexdigest()
 
     # Check If-None-Match — browser already has this version

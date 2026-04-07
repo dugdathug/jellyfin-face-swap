@@ -56,6 +56,7 @@ def _process_single_item(ji: dict, analyze, swap) -> str:
     item_name = ji.get("name", item_id)
     image_type = ji["image_type"]
 
+    assert image_type in ("poster", "backdrop", "landscape"), f"Invalid image_type: {image_type}"
     log.info(f"[{item_name}] Starting {image_type} (ji={ji_id})")
 
     try:

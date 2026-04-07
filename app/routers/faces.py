@@ -28,9 +28,13 @@ async def upload_face(
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="File must be an image")
 
+    # Check content-length header before reading full body into memory
+    if file.size and file.size > 10 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="File too large (max 10MB)")
+
     content = await file.read()
-    if len(content) > 10 * 1024 * 1024:  # 10MB limit
-        raise HTTPException(status_code=400, detail="File too large (max 10MB)")
+    if len(content) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="File too large (max 10MB)")
 
     # Determine extension from content type
     ext_map = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
@@ -68,8 +72,8 @@ async def get_face_image(face_id: int):
     if not face:
         raise HTTPException(status_code=404, detail="Face not found")
 
-    path = FACES_DIR / face["filename"]
-    if not path.exists():
-        raise HTTPException(status_code=404, detail="Face image file missing")
+    path = (FACES_DIR / face["filename"]).resolve()
+    if not str(path).startswith(str(FACES_DIR.resolve())) or not path.exists():
+        raise HTTPException(status_code=403, detail="Access denied")
 
     return FileResponse(path)

@@ -8,9 +8,12 @@ import {
   Sun,
   Moon,
   Monitor,
+  Lock,
+  LogOut,
 } from "lucide-react";
 import { type Theme, ThemeContext } from "./lib/theme";
 import { cn } from "./lib/utils";
+import * as api from "./lib/api";
 
 import Library from "./pages/Library";
 import Faces from "./pages/Faces";
@@ -40,7 +43,75 @@ function useMediaDark() {
   return dark;
 }
 
+function LoginScreen({ onLogin }: { onLogin: () => void }) {
+  const [token, setToken] = useState("");
+  const [error, setError] = useState(false);
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setError(false);
+    const ok = await api.login(token);
+    setLoading(false);
+    if (ok) {
+      onLogin();
+    } else {
+      setError(true);
+    }
+  };
+
+  return (
+    <div className="flex h-screen items-center justify-center">
+      <form onSubmit={handleSubmit} className="glass-strong w-full max-w-sm rounded-[var(--radius-glass)] p-8 space-y-5">
+        <div className="flex items-center gap-3">
+          <div className="flex h-10 w-10 items-center justify-center rounded-[var(--radius-card)] bg-[var(--primary)]">
+            <Lock className="h-5 w-5 text-[var(--primary-foreground)]" />
+          </div>
+          <div>
+            <h1 className="font-[Outfit] text-xl font-semibold text-[var(--foreground)]">Jellyfin Face Swap</h1>
+            <p className="text-xs text-[var(--foreground-muted)]">Enter your access token</p>
+          </div>
+        </div>
+        <input
+          type="password"
+          value={token}
+          onChange={(e) => setToken(e.target.value)}
+          placeholder="Access token"
+          autoFocus
+          className="w-full rounded-[var(--radius-button)] border border-[var(--input-border)] bg-[var(--input)] px-3.5 py-2.5 text-sm text-[var(--foreground)] outline-none placeholder:text-[var(--foreground-subtle)] focus:border-[var(--input-focus)] focus:ring-2 focus:ring-[var(--input-focus)]/20 font-mono"
+        />
+        {error && <p className="text-xs text-[var(--color-status-error)]">Invalid token</p>}
+        <button
+          type="submit"
+          disabled={loading || !token}
+          className="w-full rounded-[var(--radius-button)] bg-[var(--primary)] py-2.5 text-sm font-semibold text-[var(--primary-foreground)] transition-all hover:brightness-110 active:scale-[0.98] disabled:opacity-50"
+        >
+          {loading ? "Checking..." : "Log In"}
+        </button>
+      </form>
+    </div>
+  );
+}
+
 export default function App() {
+  const [authState, setAuthState] = useState<"loading" | "login" | "ready">("loading");
+
+  useEffect(() => {
+    api.checkAuth().then(({ auth_required }) => {
+      if (!auth_required || api.isAuthenticated()) {
+        setAuthState("ready");
+      } else {
+        setAuthState("login");
+      }
+    });
+
+    // Listen for 401 events from API client
+    const handler = () => setAuthState("login");
+    window.addEventListener("jfswap-auth-required", handler);
+    return () => window.removeEventListener("jfswap-auth-required", handler);
+  }, []);
+
   const [theme, setTheme] = useState<Theme>(
     () => (localStorage.getItem("jfswap-theme") as Theme) || "system"
   );
@@ -62,6 +133,18 @@ export default function App() {
   );
 
   const ThemeIcon = THEME_ICONS[theme];
+
+  if (authState === "loading") {
+    return <div className="flex h-screen items-center justify-center text-[var(--foreground-muted)]">Loading...</div>;
+  }
+
+  if (authState === "login") {
+    return (
+      <ThemeContext.Provider value={themeCtx}>
+        <LoginScreen onLogin={() => setAuthState("ready")} />
+      </ThemeContext.Provider>
+    );
+  }
 
   return (
     <ThemeContext.Provider value={themeCtx}>
@@ -105,6 +188,17 @@ export default function App() {
           >
             <ThemeIcon className="h-[18px] w-[18px]" />
           </button>
+
+          {/* Logout (only if auth is enabled) */}
+          {api.isAuthenticated() && (
+            <button
+              onClick={() => { api.logout(); setAuthState("login"); }}
+              className="flex h-10 w-10 items-center justify-center rounded-[var(--radius-button)] text-[var(--foreground-muted)] transition-colors hover:bg-[var(--color-glass-hover)] hover:text-[var(--foreground)]"
+              title="Log out"
+            >
+              <LogOut className="h-[18px] w-[18px]" />
+            </button>
+          )}
         </nav>
 
         {/* Main content */}
