@@ -71,6 +71,10 @@ def _process_single_item(ji: dict, analyze, swap) -> str:
                     "UPDATE job_items SET status = 'skipped', error = 'No image available' WHERE id = ?",
                     (ji_id,),
                 )
+                conn.execute(
+                    f"UPDATE items SET {_DB_STATUS_COL[image_type]} = 'original' WHERE id = ?",
+                    (item_id,),
+                )
             return "skipped"
 
         log.info(f"[{item_name}] Downloaded {image_type}: {len(image_bytes)} bytes, backing up")
@@ -93,6 +97,10 @@ def _process_single_item(ji: dict, analyze, swap) -> str:
                     "UPDATE job_items SET status = 'skipped', error = 'No faces detected' WHERE id = ?",
                     (ji_id,),
                 )
+                conn.execute(
+                    f"UPDATE items SET {_DB_STATUS_COL[image_type]} = 'original' WHERE id = ?",
+                    (item_id,),
+                )
             return "skipped"
 
         gender = analysis.get("dominant_gender", "male") or "male"
@@ -104,6 +112,10 @@ def _process_single_item(ji: dict, analyze, swap) -> str:
                     "UPDATE job_items SET status = 'failed', error = 'No face images available' WHERE id = ?",
                     (ji_id,),
                 )
+                conn.execute(
+                    f"UPDATE items SET {_DB_STATUS_COL[image_type]} = 'failed' WHERE id = ?",
+                    (item_id,),
+                )
             return "failed"
 
         log.info(f"[{item_name}] Picked face: {face['filename']} (id={face['id']}, gender={face['gender']})")
@@ -114,13 +126,17 @@ def _process_single_item(ji: dict, analyze, swap) -> str:
 
         edit_prompt = analysis.get("edit_prompt", "")
         log.info(f"[{item_name}] Calling swap for {image_type}...")
-        result_bytes = swap(image_bytes, face_bytes, edit_prompt)
+        result_bytes = swap(image_bytes, face_bytes, edit_prompt, image_type=image_type)
         if not result_bytes:
             log.error(f"[{item_name}] Swap returned None for {image_type}")
             with get_db() as conn:
                 conn.execute(
                     "UPDATE job_items SET status = 'failed', error = 'AI generation returned no result' WHERE id = ?",
                     (ji_id,),
+                )
+                conn.execute(
+                    f"UPDATE items SET {_DB_STATUS_COL[image_type]} = 'failed' WHERE id = ?",
+                    (item_id,),
                 )
             return "failed"
 
@@ -144,6 +160,10 @@ def _process_single_item(ji: dict, analyze, swap) -> str:
                 "UPDATE job_items SET status = 'failed', error = ? WHERE id = ?",
                 (str(e), ji_id),
             )
+            conn.execute(
+                f"UPDATE items SET {_DB_STATUS_COL[image_type]} = 'failed' WHERE id = ?",
+                (item_id,),
+            )
         return "failed"
 
 
@@ -163,40 +183,32 @@ def _process_instant_job(job_id: int) -> None:
             (job_id,),
         ).fetchall()
 
-    # Group by item_id so all image types for one title run together
-    by_title: dict[str, list[dict]] = defaultdict(list)
-    for ji in job_items:
-        d = dict(ji)
-        by_title[d["item_id"]].append(d)
-
+    all_items = [dict(ji) for ji in job_items]
     completed = 0
     failed = 0
     skipped = 0
 
-    for item_id, title_items in by_title.items():
-        # Process all image types for this title concurrently
-        with ThreadPoolExecutor(max_workers=len(title_items)) as executor:
-            futures = {
-                executor.submit(_process_single_item, ji, analyze, swap): ji
-                for ji in title_items
-            }
-            for future in as_completed(futures):
-                result = future.result()
-                if result == "success":
-                    completed += 1
-                elif result == "skipped":
-                    skipped += 1
-                else:
-                    failed += 1
+    # Process all items concurrently (10 workers ≈ ~80 RPM, well under 500 RPM limit)
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        futures = {
+            executor.submit(_process_single_item, ji, analyze, swap): ji
+            for ji in all_items
+        }
+        for future in as_completed(futures):
+            result = future.result()
+            if result == "success":
+                completed += 1
+            elif result == "skipped":
+                skipped += 1
+            else:
+                failed += 1
 
-        # Update job counters after each title
-        with get_db() as conn:
-            conn.execute(
-                "UPDATE jobs SET completed_items = ?, failed_items = ?, skipped_items = ? WHERE id = ?",
-                (completed, failed, skipped, job_id),
-            )
-
-        time.sleep(1)  # Rate limit between titles, not between image types
+            # Update job counters after each item completes
+            with get_db() as conn:
+                conn.execute(
+                    "UPDATE jobs SET completed_items = ?, failed_items = ?, skipped_items = ? WHERE id = ?",
+                    (completed, failed, skipped, job_id),
+                )
 
     # Finalize job
     with get_db() as conn:
@@ -307,12 +319,12 @@ def _create_batch_job(job_id: int) -> None:
             )
         return
 
-    # Submit batch
-    batch_job_name = gemini.create_batch_job(batch_items)
+    # Submit batch(es) — auto-splits if > 1000 items
+    batch_names = gemini.create_batch_jobs(batch_items)
     with get_db() as conn:
         conn.execute(
             "UPDATE jobs SET gemini_batch_id = ?, status = 'batch_pending' WHERE id = ?",
-            (batch_job_name, job_id),
+            (",".join(batch_names), job_id),
         )
 
 
@@ -331,23 +343,42 @@ async def batch_poller():
 
             for job_row in pending_jobs:
                 job_row = dict(job_row)
-                try:
-                    status = gemini.check_batch_status(job_row["gemini_batch_id"])
+                batch_ids = [b.strip() for b in job_row["gemini_batch_id"].split(",") if b.strip()]
 
-                    if status["is_complete"]:
-                        if status["is_success"]:
-                            _process_batch_results(job_row["id"], job_row["gemini_batch_id"])
-                        else:
+                try:
+                    # Check all batch chunks — all must complete
+                    all_complete = True
+                    any_failed = False
+                    for batch_id in batch_ids:
+                        status = gemini.check_batch_status(batch_id)
+                        if not status["is_complete"]:
+                            all_complete = False
+                            break
+                        if not status["is_success"]:
+                            any_failed = True
+
+                    if all_complete:
+                        if any_failed:
                             with get_db() as conn:
                                 conn.execute(
                                     "UPDATE jobs SET status = 'failed', completed_at = CURRENT_TIMESTAMP WHERE id = ?",
                                     (job_row["id"],),
                                 )
+                        else:
+                            # Process results from all chunks
+                            for batch_id in batch_ids:
+                                _process_batch_results(job_row["id"], batch_id)
+                            with get_db() as conn:
+                                conn.execute(
+                                    "UPDATE jobs SET status = 'completed', completed_at = CURRENT_TIMESTAMP WHERE id = ?",
+                                    (job_row["id"],),
+                                )
+
                 except Exception as e:
-                    print(f"Batch poll error for job {job_row['id']}: {e}")
+                    log.error(f"Batch poll error for job {job_row['id']}: {e}")
 
         except Exception as e:
-            print(f"Batch poller error: {e}")
+            log.error(f"Batch poller error: {e}")
 
         await asyncio.sleep(30)
 
@@ -373,8 +404,7 @@ def _process_batch_results(job_id: int, batch_job_name: str) -> None:
 
         if result_bytes:
             try:
-                jf_upload_type = "Primary" if image_type == "poster" else "Backdrop"
-                jellyfin.upload_image(item_id, jf_upload_type, result_bytes)
+                jellyfin.upload_image(item_id, _JF_UPLOAD[image_type], result_bytes)
 
                 status_col = _DB_STATUS_COL[image_type]
                 with get_db() as conn:
@@ -396,10 +426,10 @@ def _process_batch_results(job_id: int, batch_job_name: str) -> None:
                 )
             failed += 1
 
+    # Update counters (poller handles final status)
     with get_db() as conn:
         conn.execute(
-            """UPDATE jobs SET status = 'completed', completed_items = ?,
-               failed_items = ?, completed_at = CURRENT_TIMESTAMP WHERE id = ?""",
+            "UPDATE jobs SET completed_items = completed_items + ?, failed_items = failed_items + ? WHERE id = ?",
             (completed, failed, job_id),
         )
 

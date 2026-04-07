@@ -1,10 +1,7 @@
 """Jellyfin API client — browse library, download/upload images."""
 
 import base64
-import os
-import subprocess
 import time
-from pathlib import Path
 
 import requests
 
@@ -165,7 +162,7 @@ def download_image(item_id: str, image_type: str = "Primary") -> bytes | None:
         r = requests.get(
             _url(f"/Items/{item_id}/Images/{image_type}"),
             headers=_headers(),
-            timeout=30,
+            timeout=180,
         )
         if r.status_code == 404:
             return None
@@ -180,38 +177,21 @@ def download_image(item_id: str, image_type: str = "Primary") -> bytes | None:
 # ---------------------------------------------------------------------------
 
 def upload_image(item_id: str, image_type: str, image_bytes: bytes) -> None:
-    """Upload an image to Jellyfin using the configured method.
+    """Upload an image to Jellyfin via the API.
 
     image_type: 'Primary', 'Backdrop', or 'Thumb' (landscape).
-    For posters (Primary) and landscape (Thumb): always uses API upload.
-    For backdrops: uses the configured BACKDROP_UPLOAD method.
     """
-    # Map image_type to API path
     api_paths = {"Primary": "Primary", "Backdrop": "Backdrop/0", "Thumb": "Thumb"}
-    api_path = api_paths.get(image_type, image_type)
+    image_path = api_paths.get(image_type, image_type)
 
-    if image_type in ("Primary", "Thumb"):
-        _upload_via_api(item_id, api_path, image_bytes)
-    else:
-        cfg = get_settings()
-        method = cfg.backdrop_upload
-        if method == "api":
-            _upload_via_api(item_id, api_path, image_bytes)
-        elif method == "ssh":
-            _upload_via_ssh(item_id, image_bytes)
-        elif method == "local":
-            _upload_via_local(item_id, image_bytes)
-
-
-def _upload_via_api(item_id: str, image_path: str, image_bytes: bytes) -> None:
-    """Upload image via Jellyfin REST API (base64 POST)."""
     # Backdrops: DELETE first, otherwise Jellyfin appends (creates backdrop1.jpg)
     if image_path == "Backdrop/0":
         requests.delete(
             _url(f"/Items/{item_id}/Images/Backdrop/0"),
             headers=_headers(),
-            timeout=30,
+            timeout=180,
         )
+
     headers = _headers()
     headers["Content-Type"] = "image/jpeg"
     body = base64.b64encode(image_bytes).decode()
@@ -219,53 +199,6 @@ def _upload_via_api(item_id: str, image_path: str, image_bytes: bytes) -> None:
         _url(f"/Items/{item_id}/Images/{image_path}"),
         headers=headers,
         data=body,
-        timeout=60,
+        timeout=180,
     )
     r.raise_for_status()
-
-
-def _get_backdrop_host_path(item_id: str) -> str | None:
-    """Resolve the host filesystem path for a backdrop image."""
-    cfg = get_settings()
-    try:
-        r = requests.get(
-            _url(f"/Items/{item_id}/Images"),
-            headers=_headers(),
-            timeout=30,
-        )
-        r.raise_for_status()
-        for img in r.json():
-            if img["ImageType"] == "Backdrop" and img.get("ImageIndex", 0) == 0:
-                jf_path = img.get("Path", "")
-                if jf_path.startswith(cfg.jf_path_prefix):
-                    return cfg.host_path_prefix + jf_path[len(cfg.jf_path_prefix):]
-                return jf_path
-    except requests.RequestException:
-        pass
-    return None
-
-
-def _upload_via_ssh(item_id: str, image_bytes: bytes) -> None:
-    """Upload backdrop image via SSH tee."""
-    cfg = get_settings()
-    host_path = _get_backdrop_host_path(item_id)
-    if not host_path:
-        raise RuntimeError(f"Could not resolve backdrop path for item {item_id}")
-
-    proc = subprocess.run(
-        ["ssh", cfg.media_ssh, f'tee "{host_path}" > /dev/null'],
-        input=image_bytes,
-        capture_output=True,
-        timeout=30,
-        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
-    )
-    if proc.returncode != 0:
-        raise RuntimeError(f"SSH upload failed: {proc.stderr.decode('utf-8', errors='replace')}")
-
-
-def _upload_via_local(item_id: str, image_bytes: bytes) -> None:
-    """Write backdrop image directly to local filesystem."""
-    host_path = _get_backdrop_host_path(item_id)
-    if not host_path:
-        raise RuntimeError(f"Could not resolve backdrop path for item {item_id}")
-    Path(host_path).write_bytes(image_bytes)

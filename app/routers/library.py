@@ -61,7 +61,7 @@ async def list_items(
     sort: Optional[str] = Query("name", description="Sort by: name, year, last_synced"),
     order: Optional[str] = Query("asc", description="Sort order: asc, desc"),
     offset: int = Query(0, ge=0),
-    limit: int = Query(100, ge=1, le=500),
+    limit: int = Query(10000, ge=1, le=10000),
 ):
     """List library items with search and filters."""
     with get_db() as conn:
@@ -74,9 +74,7 @@ async def list_items(
         if type:
             where.append("type = ?")
             params.append(type)
-        if status:
-            where.append("poster_status = ?")
-            params.append(status)
+        # Status filtering handled client-side based on visible image types
 
         where_clause = " AND ".join(where)
 

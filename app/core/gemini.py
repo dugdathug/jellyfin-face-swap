@@ -104,10 +104,23 @@ def test_connection() -> dict:
 # Instant face swap
 # ---------------------------------------------------------------------------
 
+# Output resolution per image type
+IMAGE_SIZE_MAP = {
+    "poster": "1K",      # $0.067 — posters display small
+    "backdrop": "2K",    # $0.101 — full-screen backgrounds on 4K TVs
+    "landscape": "2K",   # $0.101 — horizontal card art on 4K TVs
+}
+
+# Cost per image (USD, from Google pricing page)
+COST_INSTANT = {"poster": 0.067, "backdrop": 0.101, "landscape": 0.101}
+COST_BATCH = {"poster": 0.034, "backdrop": 0.051, "landscape": 0.051}
+
+
 def swap_face(
     poster_bytes: bytes,
     face_bytes: bytes,
     edit_prompt: str,
+    image_type: str = "poster",
 ) -> bytes | None:
     """Swap a face in an image using Gemini image generation.
 
@@ -117,7 +130,8 @@ def swap_face(
     poster_jpg = normalize_image(poster_bytes)
     face_jpg = normalize_image(face_bytes, max_dim=1024)
 
-    log.info(f"Swap request: source={len(poster_bytes)}b (norm {len(poster_jpg)}b), face={len(face_bytes)}b (norm {len(face_jpg)}b)")
+    image_size = IMAGE_SIZE_MAP.get(image_type, "1K")
+    log.info(f"Swap request: source={len(poster_bytes)}b (norm {len(poster_jpg)}b), face={len(face_bytes)}b (norm {len(face_jpg)}b), size={image_size}, type={image_type}")
     log.info(f"Edit prompt: {edit_prompt[:150]}")
 
     try:
@@ -130,6 +144,7 @@ def swap_face(
             ],
             config=types.GenerateContentConfig(
                 response_modalities=["IMAGE"],
+                image_config=types.ImageConfig(image_size=image_size),
             ),
         )
 
@@ -166,68 +181,84 @@ def swap_face(
 # Batch face swap
 # ---------------------------------------------------------------------------
 
-def create_batch_job(items: list[dict]) -> str:
-    """Create a Gemini batch job for face swapping.
+# Max items per batch JSONL to stay well under 2GB limit
+# Each item is ~500KB base64 (2 images), so ~1000 items ≈ 500MB
+MAX_ITEMS_PER_BATCH = 1000
+
+
+def create_batch_jobs(items: list[dict]) -> list[str]:
+    """Create one or more Gemini batch jobs for face swapping.
+
+    Auto-splits into multiple batch jobs if items exceed MAX_ITEMS_PER_BATCH.
 
     items: list of dicts with keys:
         - item_id: Jellyfin item ID (used as batch request key)
+        - image_type: poster, backdrop, or landscape
         - poster_bytes: original image bytes
         - face_bytes: replacement face bytes
         - edit_prompt: prompt from analysis step
 
-    Returns the batch job name/ID for polling.
+    Returns list of batch job names for polling.
     """
-    client = _client()
+    # Split into chunks
+    chunks = [items[i:i + MAX_ITEMS_PER_BATCH] for i in range(0, len(items), MAX_ITEMS_PER_BATCH)]
+    batch_names = []
 
-    # Write JSONL file
-    batch_dir = DATA_DIR / "batches"
-    batch_dir.mkdir(exist_ok=True)
-    jsonl_path = batch_dir / f"batch_{int(time.time())}.jsonl"
+    for chunk_idx, chunk in enumerate(chunks):
+        client = _client()
+        batch_dir = DATA_DIR / "batches"
+        batch_dir.mkdir(exist_ok=True)
+        jsonl_path = batch_dir / f"batch_{int(time.time())}_{chunk_idx}.jsonl"
 
-    with open(jsonl_path, "w") as f:
-        for item in items:
-            poster_b64 = base64.b64encode(
-                normalize_image(item["poster_bytes"])
-            ).decode()
-            face_b64 = base64.b64encode(
-                normalize_image(item["face_bytes"], max_dim=1024)
-            ).decode()
+        with open(jsonl_path, "w") as f:
+            for item in chunk:
+                image_type = item.get("image_type", "poster")
+                image_size = IMAGE_SIZE_MAP.get(image_type, "1K")
 
-            request = {
-                "key": item["item_id"],
-                "request": {
-                    "contents": [{
-                        "parts": [
-                            {"inline_data": {"mime_type": "image/jpeg", "data": poster_b64}},
-                            {"inline_data": {"mime_type": "image/jpeg", "data": face_b64}},
-                            {"text": item["edit_prompt"]},
-                        ]
-                    }],
-                    "generation_config": {"responseModalities": ["IMAGE"]},
-                },
-            }
-            f.write(json.dumps(request) + "\n")
+                poster_b64 = base64.b64encode(
+                    normalize_image(item["poster_bytes"])
+                ).decode()
+                face_b64 = base64.b64encode(
+                    normalize_image(item["face_bytes"], max_dim=1024)
+                ).decode()
 
-    # Upload JSONL file
-    uploaded = client.files.upload(
-        file=str(jsonl_path),
-        config=types.UploadFileConfig(
-            display_name=f"jfswap-batch-{int(time.time())}",
-            mime_type="jsonl",
-        ),
-    )
+                request = {
+                    "key": item["item_id"],
+                    "request": {
+                        "contents": [{
+                            "parts": [
+                                {"inline_data": {"mime_type": "image/jpeg", "data": poster_b64}},
+                                {"inline_data": {"mime_type": "image/jpeg", "data": face_b64}},
+                                {"text": item["edit_prompt"]},
+                            ]
+                        }],
+                        "generation_config": {
+                            "responseModalities": ["IMAGE"],
+                            "image_generation_config": {"image_size": image_size},
+                        },
+                    },
+                }
+                f.write(json.dumps(request) + "\n")
 
-    # Create batch job
-    batch_job = client.batches.create(
-        model=BATCH_IMAGE_MODEL,
-        src=uploaded.name,
-        config={"display_name": f"jfswap-{int(time.time())}"},
-    )
+        uploaded = client.files.upload(
+            file=str(jsonl_path),
+            config=types.UploadFileConfig(
+                display_name=f"jfswap-batch-{int(time.time())}-{chunk_idx}",
+                mime_type="jsonl",
+            ),
+        )
 
-    # Clean up local JSONL
-    jsonl_path.unlink(missing_ok=True)
+        batch_job = client.batches.create(
+            model=BATCH_IMAGE_MODEL,
+            src=uploaded.name,
+            config={"display_name": f"jfswap-{int(time.time())}-{chunk_idx}"},
+        )
 
-    return batch_job.name
+        jsonl_path.unlink(missing_ok=True)
+        batch_names.append(batch_job.name)
+        log.info(f"Batch chunk {chunk_idx+1}/{len(chunks)}: {len(chunk)} items → {batch_job.name}")
+
+    return batch_names
 
 
 BATCH_COMPLETED_STATES = {

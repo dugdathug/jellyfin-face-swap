@@ -48,6 +48,7 @@ export async function getLibraryItems(params?: {
   if (params?.order) query.set("order", params.order);
   if (params?.offset) query.set("offset", String(params.offset));
   if (params?.limit) query.set("limit", String(params.limit));
+  else query.set("limit", "10000");
   return fetchJSON<LibraryResponse>(`/library/items?${query}`);
 }
 
@@ -145,13 +146,6 @@ export async function restoreBulk(itemIds: string[], imageType = "poster") {
 
 export async function getSettings() {
   return fetchJSON<Settings>("/settings");
-}
-
-export async function updateSettings(body: Record<string, string>) {
-  return fetchJSON<Settings>("/settings", {
-    method: "PUT",
-    body: JSON.stringify(body),
-  });
 }
 
 export async function testJellyfin() {

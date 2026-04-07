@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   Search,
   RefreshCw,
@@ -47,6 +48,11 @@ const IMAGE_TYPES = [
 ] as const;
 
 type ImageType = "poster" | "backdrop" | "landscape";
+
+// Gemini image generation cost (USD per image, from Google pricing)
+// Poster = 1K ($0.067), Backdrop/Landscape = 2K ($0.101)
+const COST_INSTANT: Record<string, number> = { poster: 0.067, backdrop: 0.101, landscape: 0.101 };
+const COST_BATCH: Record<string, number> = { poster: 0.034, backdrop: 0.051, landscape: 0.051 };
 
 function getImageUrl(itemId: string, type: ImageType, status: string) {
   if (type === "poster") return api.posterUrl(itemId, status);
@@ -296,6 +302,105 @@ function Lightbox({
 /* ------------------------------------------------------------------ */
 /* Sticky state hook                                                   */
 /* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------ */
+/* Virtualized Grid                                                    */
+/* ------------------------------------------------------------------ */
+function VirtualGrid({
+  items,
+  posterOnly,
+  visibleTypes,
+  selected,
+  onToggle,
+  onExpand,
+}: {
+  items: LibraryItem[];
+  posterOnly: boolean;
+  visibleTypes: Set<ImageType>;
+  selected: Set<string>;
+  onToggle: (index: number, e: React.MouseEvent) => void;
+  onExpand: (item: LibraryItem, type: ImageType) => void;
+}) {
+  const parentRef = useRef<HTMLDivElement>(null);
+  const minCardWidth = posterOnly ? 150 : 300;
+  const gap = 16;
+
+  // Calculate columns based on container width
+  const [cols, setCols] = useState(4);
+  useEffect(() => {
+    const el = parentRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver((entries) => {
+      const w = entries[0].contentRect.width;
+      setCols(Math.max(1, Math.floor((w + gap) / (minCardWidth + gap))));
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [minCardWidth]);
+
+  const rowCount = Math.ceil(items.length / cols);
+  const rowHeight = posterOnly ? 320 : 260;
+
+  const virtualizer = useVirtualizer({
+    count: rowCount,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => rowHeight,
+    overscan: 3,
+  });
+
+  return (
+    <div
+      ref={parentRef}
+      className="overflow-y-auto"
+      style={{ height: "calc(100vh - 280px)" }}
+    >
+      <div
+        style={{
+          height: `${virtualizer.getTotalSize()}px`,
+          position: "relative",
+          width: "100%",
+        }}
+      >
+        {virtualizer.getVirtualItems().map((virtualRow) => {
+          const startIdx = virtualRow.index * cols;
+          const rowItems = items.slice(startIdx, startIdx + cols);
+
+          return (
+            <div
+              key={virtualRow.index}
+              style={{
+                position: "absolute",
+                top: 0,
+                left: 0,
+                width: "100%",
+                height: `${virtualRow.size}px`,
+                transform: `translateY(${virtualRow.start}px)`,
+                display: "grid",
+                gridTemplateColumns: `repeat(${cols}, 1fr)`,
+                gap: `${gap}px`,
+              }}
+            >
+              {rowItems.map((item, colIdx) => {
+                const idx = startIdx + colIdx;
+                return (
+                  <TitleCard
+                    key={item.id}
+                    item={item}
+                    visibleTypes={visibleTypes}
+                    selected={selected.has(item.id)}
+                    onToggle={(e) => onToggle(idx, e)}
+                    onExpand={(type) => onExpand(item, type)}
+                  />
+                );
+              })}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+
 function useStickyState<T>(key: string, defaultValue: T): [T, (v: T) => void] {
   const [value, setValue] = useState<T>(() => {
     const stored = localStorage.getItem(`jfswap-${key}`);
@@ -330,6 +435,7 @@ export default function Library() {
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [lightbox, setLightbox] = useState<{ item: LibraryItem; type: ImageType } | null>(null);
+  const [confirmJob, setConfirmJob] = useState<{ mode: "instant" | "batch" } | null>(null);
   const lastToggleIndex = useRef<number>(-1);
 
   const toggleVisibleType = (type: ImageType) => {
@@ -342,23 +448,29 @@ export default function Library() {
     setVisibleTypesArr(Array.from(next));
   };
 
+  const itemsRef = useRef<string>("");
   const fetchItems = useCallback(async () => {
-    setLoading(true);
+    const isInitial = itemsRef.current === "";
+    if (isInitial) setLoading(true);
     try {
       const data = await api.getLibraryItems({
         search: search || undefined,
         type: typeFilter || undefined,
-        status: statusFilter || undefined,
         sort: sortBy,
         order: sortOrder,
-        limit: 200,
+        limit: 10000,
       });
-      setItems(data.items);
-      setTotal(data.total);
+      // Only update state if data actually changed (prevents grid re-render flicker during polling)
+      const key = JSON.stringify(data.items.map((i) => `${i.id}:${i.poster_status}:${i.backdrop_status}:${i.landscape_status}`));
+      if (key !== itemsRef.current) {
+        itemsRef.current = key;
+        setItems(data.items);
+        setTotal(data.total);
+      }
     } finally {
-      setLoading(false);
+      if (isInitial) setLoading(false);
     }
-  }, [search, typeFilter, statusFilter, sortBy, sortOrder]);
+  }, [search, typeFilter, sortBy, sortOrder]);
 
   useEffect(() => {
     const timer = setTimeout(fetchItems, 300);
@@ -376,13 +488,13 @@ export default function Library() {
   };
 
   const toggleItem = (index: number, e: React.MouseEvent) => {
-    const id = items[index].id;
+    const id = filteredItems[index].id;
     if (e.shiftKey && lastToggleIndex.current >= 0) {
       const start = Math.min(lastToggleIndex.current, index);
       const end = Math.max(lastToggleIndex.current, index);
       setSelected((prev) => {
         const next = new Set(prev);
-        for (let i = start; i <= end; i++) next.add(items[i].id);
+        for (let i = start; i <= end; i++) next.add(filteredItems[i].id);
         return next;
       });
     } else {
@@ -396,8 +508,8 @@ export default function Library() {
   };
 
   const selectAll = () => {
-    if (selected.size === items.length) setSelected(new Set());
-    else setSelected(new Set(items.map((i) => i.id)));
+    if (selected.size === filteredItems.length) setSelected(new Set());
+    else setSelected(new Set(filteredItems.map((i) => i.id)));
   };
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -405,8 +517,15 @@ export default function Library() {
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, []);
 
-  const startJob = async (mode: "instant" | "batch") => {
+  const requestJob = (mode: "instant" | "batch") => {
     if (selected.size === 0) return;
+    setConfirmJob({ mode });
+  };
+
+  const executeJob = async () => {
+    if (!confirmJob || selected.size === 0) return;
+    const mode = confirmJob.mode;
+    setConfirmJob(null);
     setCreating(true);
     try {
       await api.createJob({
@@ -433,6 +552,27 @@ export default function Library() {
 
   const posterOnly = visibleTypes.has("poster") && visibleTypes.size === 1;
 
+  // Client-side status filtering based on visible image types
+  const getVisibleStatuses = (item: LibraryItem): string[] => {
+    const statuses: string[] = [];
+    if (visibleTypes.has("poster")) statuses.push(item.poster_status);
+    if (visibleTypes.has("backdrop")) statuses.push(item.backdrop_status);
+    if (visibleTypes.has("landscape")) statuses.push(item.landscape_status);
+    return statuses;
+  };
+
+  const filteredItems = statusFilter
+    ? items.filter((item) => {
+        const statuses = getVisibleStatuses(item);
+        if (statusFilter === "original") {
+          // Show only if ALL visible types are original
+          return statuses.every((s) => s === "original");
+        }
+        // Show if ANY visible type matches the filter
+        return statuses.some((s) => s === statusFilter);
+      })
+    : items;
+
   return (
     <div className="space-y-5">
       {/* Header */}
@@ -450,11 +590,11 @@ export default function Library() {
           className={cn(
             "inline-flex items-center gap-2 rounded-[var(--radius-button)] px-4 py-2 text-sm font-medium transition-all duration-200",
             "glass hover:bg-[var(--color-glass-hover)] active:scale-[0.97]",
-            selected.size === items.length && items.length > 0 ? "text-[var(--primary)]" : "text-[var(--foreground)]"
+            selected.size === filteredItems.length && filteredItems.length > 0 ? "text-[var(--primary)]" : "text-[var(--foreground)]"
           )}
         >
           <CheckCheck className="h-4 w-4" />
-          {selected.size === items.length && items.length > 0 ? "Deselect All" : "Select All"}
+          {selected.size === filteredItems.length && filteredItems.length > 0 ? "Deselect All" : "Select All"}
         </button>
         <button
           onClick={syncLibrary}
@@ -577,37 +717,46 @@ export default function Library() {
             exit={{ opacity: 0, y: -8, height: 0 }}
             className="glass-strong flex items-center gap-3 rounded-[var(--radius-glass)] px-4 py-3"
           >
-            <span className="text-sm font-medium text-[var(--foreground)]">
-              {selected.size} title{selected.size !== 1 ? "s" : ""} selected
-            </span>
-            <span className="text-xs text-[var(--foreground-muted)]">
-              ({visibleTypesArr.join(" + ")} per title)
-            </span>
+            {(() => {
+              const totalImages = selected.size * visibleTypesArr.length;
+              const instantCost = (selected.size * visibleTypesArr.reduce((sum, t) => sum + (COST_INSTANT[t] ?? 0.067), 0)).toFixed(2);
+              const batchCost = (selected.size * visibleTypesArr.reduce((sum, t) => sum + (COST_BATCH[t] ?? 0.034), 0)).toFixed(2);
+              return (
+                <>
+                  <span className="text-sm font-medium text-[var(--foreground)]">
+                    {selected.size} title{selected.size !== 1 ? "s" : ""} &middot; {totalImages} image{totalImages !== 1 ? "s" : ""}
+                  </span>
+                  <span className="text-xs text-[var(--foreground-muted)]">
+                    ({visibleTypesArr.join(" + ")})
+                  </span>
 
-            <div className="ml-auto flex gap-2">
-              <button
-                onClick={() => startJob("instant")}
-                disabled={creating}
-                className="inline-flex items-center gap-1.5 rounded-[var(--radius-button)] bg-[var(--color-accent-purple)] px-4 py-2 text-sm font-semibold text-white transition-all hover:brightness-110 active:scale-[0.97] glow-purple"
-              >
-                <Zap className="h-3.5 w-3.5" />
-                Swap Now
-              </button>
-              <button
-                onClick={() => startJob("batch")}
-                disabled={creating}
-                className="inline-flex items-center gap-1.5 rounded-[var(--radius-button)] bg-[var(--color-accent-cyan)] px-4 py-2 text-sm font-semibold text-white transition-all hover:brightness-110 active:scale-[0.97] glow-cyan"
-              >
-                <Clock className="h-3.5 w-3.5" />
-                Batch (50% off)
-              </button>
-              <button
-                onClick={() => setSelected(new Set())}
-                className="rounded-[var(--radius-button)] px-3 py-2 text-sm text-[var(--foreground-muted)] hover:text-[var(--foreground)]"
-              >
-                Cancel
-              </button>
-            </div>
+                  <div className="ml-auto flex gap-2">
+                    <button
+                      onClick={() => requestJob("instant")}
+                      disabled={creating}
+                      className="inline-flex items-center gap-1.5 rounded-[var(--radius-button)] bg-[var(--color-accent-purple)] px-4 py-2 text-sm font-semibold text-white transition-all hover:brightness-110 active:scale-[0.97] glow-purple"
+                    >
+                      <Zap className="h-3.5 w-3.5" />
+                      Swap Now ~${instantCost}
+                    </button>
+                    <button
+                      onClick={() => requestJob("batch")}
+                      disabled={creating}
+                      className="inline-flex items-center gap-1.5 rounded-[var(--radius-button)] bg-[var(--color-accent-cyan)] px-4 py-2 text-sm font-semibold text-white transition-all hover:brightness-110 active:scale-[0.97] glow-cyan"
+                    >
+                      <Clock className="h-3.5 w-3.5" />
+                      Batch ~${batchCost}
+                    </button>
+                    <button
+                      onClick={() => setSelected(new Set())}
+                      className="rounded-[var(--radius-button)] px-3 py-2 text-sm text-[var(--foreground-muted)] hover:text-[var(--foreground)]"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </>
+              );
+            })()}
           </motion.div>
         )}
       </AnimatePresence>
@@ -617,7 +766,7 @@ export default function Library() {
         <div className="flex items-center justify-center py-20">
           <Loader2 className="h-8 w-8 animate-spin text-[var(--foreground-muted)]" />
         </div>
-      ) : items.length === 0 ? (
+      ) : filteredItems.length === 0 ? (
         <div className="glass flex flex-col items-center justify-center rounded-[var(--radius-glass)] py-20">
           <Film className="mb-3 h-12 w-12 text-[var(--foreground-subtle)]" />
           <p className="text-[var(--foreground-muted)]">No items found</p>
@@ -626,29 +775,111 @@ export default function Library() {
           </p>
         </div>
       ) : (
-        <motion.div
-          layout
-          className={cn(
-            "grid gap-4",
-            posterOnly
-              ? "grid-cols-[repeat(auto-fill,minmax(150px,1fr))]"
-              : "grid-cols-[repeat(auto-fill,minmax(300px,1fr))]"
-          )}
-        >
-          <AnimatePresence mode="popLayout">
-            {items.map((item, idx) => (
-              <TitleCard
-                key={item.id}
-                item={item}
-                visibleTypes={visibleTypes}
-                selected={selected.has(item.id)}
-                onToggle={(e) => toggleItem(idx, e)}
-                onExpand={(type) => setLightbox({ item, type })}
-              />
-            ))}
-          </AnimatePresence>
-        </motion.div>
+        <VirtualGrid
+          items={filteredItems}
+          posterOnly={posterOnly}
+          visibleTypes={visibleTypes}
+          selected={selected}
+          onToggle={toggleItem}
+          onExpand={(item, type) => setLightbox({ item, type })}
+        />
       )}
+
+      {/* Confirmation dialog */}
+      <AnimatePresence>
+        {confirmJob && (() => {
+          const totalImages = selected.size * visibleTypesArr.length;
+          const costMap = confirmJob.mode === "instant" ? COST_INSTANT : COST_BATCH;
+          const totalCost = selected.size * visibleTypesArr.reduce((sum, t) => sum + (costMap[t] ?? 0.067), 0);
+          const timeEstimate = confirmJob.mode === "instant"
+            ? (() => {
+                // ~20s per image, 10 concurrent workers → ~30 images/min
+                const mins = Math.ceil(totalImages / 30);
+                return mins <= 1 ? "~1-2 minutes" : `~${mins}-${mins + Math.ceil(mins * 0.5)} minutes`;
+              })()
+            : "minutes to hours (up to 24h)";
+
+          return (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-8"
+              onClick={() => setConfirmJob(null)}
+            >
+              <motion.div
+                initial={{ scale: 0.95, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.95, opacity: 0 }}
+                className="glass-strong w-full max-w-md rounded-[var(--radius-glass)] p-6"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <h3 className="font-[Outfit] text-lg font-semibold text-[var(--foreground)]">
+                  Confirm {confirmJob.mode === "instant" ? "Instant" : "Batch"} Swap
+                </h3>
+
+                <div className="mt-4 space-y-2">
+                  <div className="flex justify-between text-sm">
+                    <span className="text-[var(--foreground-muted)]">Titles</span>
+                    <span className="text-[var(--foreground)]">{selected.size}</span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-[var(--foreground-muted)]">Image types</span>
+                    <span className="text-[var(--foreground)]">{visibleTypesArr.join(", ")}</span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-[var(--foreground-muted)]">Total images</span>
+                    <span className="text-[var(--foreground)]">{totalImages}</span>
+                  </div>
+                  <div className="h-px bg-[var(--border)]" />
+                  <div className="flex justify-between text-sm font-medium">
+                    <span className="text-[var(--foreground-muted)]">Estimated cost</span>
+                    <span className="text-[var(--foreground)]">~${totalCost.toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-[var(--foreground-muted)]">Estimated time</span>
+                    <span className="text-[var(--foreground)]">{timeEstimate}</span>
+                  </div>
+                </div>
+
+                {confirmJob.mode === "instant" && totalImages > 50 && (
+                  <p className="mt-3 text-xs text-[var(--color-status-warning)] bg-[var(--color-status-warning)]/5 rounded-lg px-3 py-2">
+                    Large instant jobs take a while. Consider using Batch mode for 50% cost savings.
+                  </p>
+                )}
+
+                {totalImages > 2000 && (
+                  <p className="mt-3 text-xs text-[var(--foreground-muted)] bg-[var(--surface-raised)] rounded-lg px-3 py-2">
+                    Large batches may be split into multiple jobs automatically.
+                  </p>
+                )}
+
+                <div className="mt-5 flex gap-2 justify-end">
+                  <button
+                    onClick={() => setConfirmJob(null)}
+                    className="rounded-[var(--radius-button)] px-4 py-2 text-sm text-[var(--foreground-muted)] hover:text-[var(--foreground)]"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={executeJob}
+                    disabled={creating}
+                    className={cn(
+                      "inline-flex items-center gap-1.5 rounded-[var(--radius-button)] px-5 py-2 text-sm font-semibold text-white transition-all hover:brightness-110 active:scale-[0.97]",
+                      confirmJob.mode === "instant"
+                        ? "bg-[var(--color-accent-purple)] glow-purple"
+                        : "bg-[var(--color-accent-cyan)] glow-cyan"
+                    )}
+                  >
+                    {creating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : confirmJob.mode === "instant" ? <Zap className="h-3.5 w-3.5" /> : <Clock className="h-3.5 w-3.5" />}
+                    Confirm ~${totalCost.toFixed(2)}
+                  </button>
+                </div>
+              </motion.div>
+            </motion.div>
+          );
+        })()}
+      </AnimatePresence>
 
       {/* Lightbox */}
       <AnimatePresence>

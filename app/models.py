@@ -96,32 +96,12 @@ class JobDetail(BaseModel):
 
 # --- Settings ---
 
-class SettingsUpdate(BaseModel):
-    jellyfin_url: Optional[str] = None
-    jellyfin_api_key: Optional[str] = None
-    gemini_api_key: Optional[str] = None
-    anthropic_api_key: Optional[str] = None
-    fal_key: Optional[str] = None
-    backdrop_upload: Optional[str] = None
-    media_ssh: Optional[str] = None
-    jf_path_prefix: Optional[str] = None
-    host_path_prefix: Optional[str] = None
-    analysis_backend: Optional[str] = None
-    swap_backend: Optional[str] = None
-
-
 class SettingsResponse(BaseModel):
     jellyfin_url: str
-    jellyfin_api_key: str
-    gemini_api_key: str
-    anthropic_api_key: str
-    fal_key: str
     jellyfin_configured: bool
     gemini_configured: bool
     anthropic_configured: bool
     fal_configured: bool
-    backdrop_upload: str
-    media_ssh: str
     analysis_backend: str
     swap_backend: str
     missing: list[str]

@@ -65,16 +65,10 @@ export interface JobDetail {
 
 export interface Settings {
   jellyfin_url: string;
-  jellyfin_api_key: string;
-  gemini_api_key: string;
-  anthropic_api_key: string;
-  fal_key: string;
   jellyfin_configured: boolean;
   gemini_configured: boolean;
   anthropic_configured: boolean;
   fal_configured: boolean;
-  backdrop_upload: string;
-  media_ssh: string;
   analysis_backend: string;
   swap_backend: string;
   missing: string[];

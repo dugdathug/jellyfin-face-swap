@@ -58,16 +58,6 @@ class Settings(BaseModel):
     anthropic_api_key: str = ""
     fal_key: str = ""
 
-    # Backdrop upload method: api, ssh, local
-    backdrop_upload: str = Field(default="api", pattern=r"^(api|ssh|local)$")
-
-    # SSH mode settings
-    media_ssh: str = ""  # e.g. user@hostname
-
-    # Path mapping (ssh/local mode with Docker)
-    jf_path_prefix: str = "/media/"
-    host_path_prefix: str = "/mnt/media/"
-
     # AI backend selection
     analysis_backend: str = Field(default="gemini", pattern=r"^(gemini|claude)$")
     swap_backend: str = Field(default="gemini", pattern=r"^(gemini|fal)$")
@@ -89,8 +79,6 @@ class Settings(BaseModel):
             missing.append("ANTHROPIC_API_KEY (required for Claude analysis backend)")
         if self.swap_backend == "fal" and not self.fal_key:
             missing.append("FAL_KEY (required for fal.ai swap backend)")
-        if self.backdrop_upload == "ssh" and not self.media_ssh:
-            missing.append("MEDIA_SSH (required for SSH backdrop upload)")
         return missing
 
 
@@ -123,10 +111,6 @@ def load_settings() -> Settings:
         gemini_api_key=get("GEMINI_API_KEY"),
         anthropic_api_key=get("ANTHROPIC_API_KEY"),
         fal_key=get("FAL_KEY"),
-        backdrop_upload=get("BACKDROP_UPLOAD", "api"),
-        media_ssh=get("MEDIA_SSH"),
-        jf_path_prefix=get("JF_PATH_PREFIX", "/media/"),
-        host_path_prefix=get("HOST_PATH_PREFIX", "/mnt/media/"),
         analysis_backend=get("ANALYSIS_BACKEND", "gemini"),
         swap_backend=get("SWAP_BACKEND", "gemini"),
         host=get("HOST", "0.0.0.0"),
@@ -134,19 +118,13 @@ def load_settings() -> Settings:
     )
 
 
-# Singleton — reloaded on settings update from UI
+# Singleton — loaded once from .env on startup
 _settings: Optional[Settings] = None
 
 
 def get_settings() -> Settings:
-    """Get current settings (lazy-loaded singleton)."""
+    """Get current settings (lazy-loaded singleton from .env)."""
     global _settings
     if _settings is None:
         _settings = load_settings()
     return _settings
-
-
-def update_settings(new_settings: Settings) -> None:
-    """Update the in-memory settings (called from settings UI)."""
-    global _settings
-    _settings = new_settings
