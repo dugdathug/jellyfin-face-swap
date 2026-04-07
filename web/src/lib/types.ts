@@ -4,14 +4,8 @@ export interface LibraryItem {
   type: "Movie" | "Series" | "Season";
   parent_id: string | null;
   has_poster: boolean;
-  has_backdrop: boolean;
-  has_landscape: boolean;
   poster_status: "original" | "swapped" | "failed" | "pending";
-  backdrop_status: "original" | "swapped" | "failed" | "pending";
-  landscape_status: "original" | "swapped" | "failed" | "pending";
   poster_face_id: number | null;
-  backdrop_face_id: number | null;
-  landscape_face_id: number | null;
   year: number | null;
   last_synced: string | null;
 }

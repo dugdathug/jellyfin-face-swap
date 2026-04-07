@@ -15,14 +15,8 @@ CREATE TABLE IF NOT EXISTS items (
     type TEXT NOT NULL,
     parent_id TEXT,
     has_poster BOOLEAN DEFAULT 0,
-    has_backdrop BOOLEAN DEFAULT 0,
-    has_landscape BOOLEAN DEFAULT 0,
     poster_status TEXT DEFAULT 'original',
-    backdrop_status TEXT DEFAULT 'original',
-    landscape_status TEXT DEFAULT 'original',
     poster_face_id INTEGER REFERENCES faces(id),
-    backdrop_face_id INTEGER REFERENCES faces(id),
-    landscape_face_id INTEGER REFERENCES faces(id),
     year INTEGER,
     date_added TIMESTAMP,
     last_synced TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -71,7 +65,6 @@ CREATE TABLE IF NOT EXISTS settings (
 
 CREATE INDEX IF NOT EXISTS idx_items_type ON items(type);
 CREATE INDEX IF NOT EXISTS idx_items_poster_status ON items(poster_status);
-CREATE INDEX IF NOT EXISTS idx_items_backdrop_status ON items(backdrop_status);
 CREATE INDEX IF NOT EXISTS idx_job_items_job_id ON job_items(job_id);
 CREATE INDEX IF NOT EXISTS idx_job_items_status ON job_items(status);
 """

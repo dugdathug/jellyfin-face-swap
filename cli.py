@@ -27,20 +27,18 @@ def get_swap_fn():
     return gemini.swap_face
 
 
-def process_item(item_id, item_name, item_type, image_type, analyze, swap, dry_run=False):
+def process_item(item_id, item_name, item_type, analyze, swap, dry_run=False):
     """Process a single item. Returns status string."""
-    jf_image_type = "Primary" if image_type == "poster" else "Backdrop/0"
-
-    print(f"  Downloading {image_type}...")
-    image_bytes = jellyfin.download_image(item_id, jf_image_type)
+    print(f"  Downloading poster...")
+    image_bytes = jellyfin.download_image(item_id, "Primary")
     if not image_bytes:
-        print(f"  No {image_type} image — skipping")
+        print(f"  No poster image — skipping")
         return "skipped"
 
-    faces_module.backup_image(item_id, image_type, image_bytes)
+    faces_module.backup_image(item_id, "poster", image_bytes)
 
     print(f"  Analyzing faces...")
-    analysis = analyze(image_bytes, image_type)
+    analysis = analyze(image_bytes, "poster")
     total = analysis.get("total_faces", 0)
 
     if total == 0:
@@ -70,19 +68,16 @@ def process_item(item_id, item_name, item_type, image_type, analyze, swap, dry_r
         return "failed"
 
     print(f"  Uploading to Jellyfin...")
-    jf_upload_type = "Primary" if image_type == "poster" else "Backdrop"
-    jellyfin.upload_image(item_id, jf_upload_type, result_bytes)
+    jellyfin.upload_image(item_id, "Primary", result_bytes)
     return "success"
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Swap faces in Jellyfin posters and backdrops")
+    parser = argparse.ArgumentParser(description="Swap faces in Jellyfin posters")
     parser.add_argument("--dry-run", action="store_true", help="Analyze only, don't upload")
     parser.add_argument("--limit", type=int, default=0, help="Max items to process (0=all)")
     parser.add_argument("--movies-only", action="store_true", help="Skip TV shows")
     parser.add_argument("--shows-only", action="store_true", help="Skip movies")
-    parser.add_argument("--backdrops", action="store_true", help="Process backdrops instead of posters")
-    parser.add_argument("--all", action="store_true", help="Process both posters and backdrops")
     parser.add_argument("--restore", action="store_true", help="Restore originals from backups")
     parser.add_argument("--serve", action="store_true", help="Start the web UI server")
     args = parser.parse_args()
@@ -117,13 +112,7 @@ def main():
     analyze = get_analysis_fn()
     swap = get_swap_fn()
 
-    image_types = []
-    if args.backdrops:
-        image_types = ["backdrop"]
-    elif args.all:
-        image_types = ["poster", "backdrop"]
-    else:
-        image_types = ["poster"]
+    image_types = ["poster"]
 
     # Gather items
     items = []
@@ -151,8 +140,7 @@ def main():
                 if backup:
                     print(f"  Restoring {item['name']} ({img_type})...")
                     if not args.dry_run:
-                        jf_type = "Primary" if img_type == "poster" else "Backdrop"
-                        jellyfin.upload_image(item["id"], jf_type, backup)
+                        jellyfin.upload_image(item["id"], "Primary", backup)
                     restored += 1
         print(f"\nRestored {restored} items")
         return
@@ -166,11 +154,11 @@ def main():
             break
 
         for img_type in image_types:
-            print(f"\n[{item['type']}] {item['name']} ({img_type})")
+            print(f"\n[{item['type']}] {item['name']}")
             try:
                 result = process_item(
                     item["id"], item["name"], item["type"],
-                    img_type, analyze, swap, args.dry_run,
+                    analyze, swap, args.dry_run,
                 )
                 stats[result] = stats.get(result, 0) + 1
                 if result != "skipped":

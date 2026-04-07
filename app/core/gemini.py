@@ -106,14 +106,12 @@ def test_connection() -> dict:
 
 # Output resolution per image type
 IMAGE_SIZE_MAP = {
-    "poster": "1K",      # $0.067 — posters display small
-    "backdrop": "2K",    # $0.101 — full-screen backgrounds on 4K TVs
-    "landscape": "2K",   # $0.101 — horizontal card art on 4K TVs
+    "poster": "1K",      # $0.067
 }
 
 # Cost per image (USD, from Google pricing page)
-COST_INSTANT = {"poster": 0.067, "backdrop": 0.101, "landscape": 0.101}
-COST_BATCH = {"poster": 0.034, "backdrop": 0.051, "landscape": 0.051}
+COST_INSTANT = {"poster": 0.067}
+COST_BATCH = {"poster": 0.034}
 
 
 def swap_face(
@@ -234,7 +232,7 @@ def create_batch_jobs(items: list[dict]) -> list[str]:
                         }],
                         "generation_config": {
                             "responseModalities": ["IMAGE"],
-                            "image_generation_config": {"image_size": image_size},
+                            "imageConfig": {"imageSize": image_size},
                         },
                     },
                 }

@@ -21,10 +21,10 @@ from ..models import Job, JobCreate, JobDetail, JobItem
 router = APIRouter()
 
 # Maps our image_type names to Jellyfin API paths
-_JF_DOWNLOAD = {"poster": "Primary", "backdrop": "Backdrop/0", "landscape": "Thumb"}
-_JF_UPLOAD = {"poster": "Primary", "backdrop": "Backdrop", "landscape": "Thumb"}
-_DB_STATUS_COL = {"poster": "poster_status", "backdrop": "backdrop_status", "landscape": "landscape_status"}
-_DB_FACE_COL = {"poster": "poster_face_id", "backdrop": "backdrop_face_id", "landscape": "landscape_face_id"}
+_JF_DOWNLOAD = {"poster": "Primary"}
+_JF_UPLOAD = {"poster": "Primary"}
+_DB_STATUS_COL = {"poster": "poster_status"}
+_DB_FACE_COL = {"poster": "poster_face_id"}
 
 
 def _get_analysis_fn():
@@ -56,7 +56,7 @@ def _process_single_item(ji: dict, analyze, swap) -> str:
     item_name = ji.get("name", item_id)
     image_type = ji["image_type"]
 
-    assert image_type in ("poster", "backdrop", "landscape"), f"Invalid image_type: {image_type}"
+    assert image_type == "poster", f"Invalid image_type: {image_type}"
     log.info(f"[{item_name}] Starting {image_type} (ji={ji_id})")
 
     try:
@@ -457,14 +457,8 @@ async def create_job(body: JobCreate, background_tasks: BackgroundTasks):
         )
         job_id = cursor.lastrowid
 
-        # Create job_items — image_type can be comma-separated (e.g., "poster,backdrop")
-        all_types = {"poster", "backdrop", "landscape"}
-        if body.image_type == "all":
-            image_types = sorted(all_types)
-        else:
-            image_types = [t.strip() for t in body.image_type.split(",") if t.strip() in all_types]
-        if not image_types:
-            image_types = ["poster"]
+        # Create job_items — poster only
+        image_types = ["poster"]
 
         for item_id in body.item_ids:
             for img_type in image_types:

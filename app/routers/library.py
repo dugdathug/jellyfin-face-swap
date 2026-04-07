@@ -31,21 +31,19 @@ async def sync_library():
             existing = conn.execute("SELECT id FROM items WHERE id = ?", (item["id"],)).fetchone()
             if existing:
                 conn.execute(
-                    """UPDATE items SET name=?, type=?, parent_id=?, has_poster=?, has_backdrop=?,
-                       has_landscape=?, year=?, date_added=?, last_synced=CURRENT_TIMESTAMP WHERE id=?""",
+                    """UPDATE items SET name=?, type=?, parent_id=?, has_poster=?,
+                       year=?, date_added=?, last_synced=CURRENT_TIMESTAMP WHERE id=?""",
                     (item["name"], item["type"], item.get("parent_id"),
-                     item.get("has_poster", False), item.get("has_backdrop", False),
-                     item.get("has_landscape", False), item.get("year"),
+                     item.get("has_poster", False), item.get("year"),
                      item.get("date_added"), item["id"]),
                 )
                 updated_count += 1
             else:
                 conn.execute(
-                    """INSERT INTO items (id, name, type, parent_id, has_poster, has_backdrop, has_landscape, year, date_added)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    """INSERT INTO items (id, name, type, parent_id, has_poster, year, date_added)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
                     (item["id"], item["name"], item["type"], item.get("parent_id"),
-                     item.get("has_poster", False), item.get("has_backdrop", False),
-                     item.get("has_landscape", False), item.get("year"),
+                     item.get("has_poster", False), item.get("year"),
                      item.get("date_added")),
                 )
                 new_count += 1

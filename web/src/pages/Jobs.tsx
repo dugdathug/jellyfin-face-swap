@@ -171,7 +171,8 @@ function JobCard({ job, onRefresh, onLightbox }: { job: Job; onRefresh: () => vo
             {job.failed_items > 0 && ` · ${job.failed_items} failed`}
             {job.skipped_items > 0 && ` · ${job.skipped_items} skipped`}
             {job.status === "batch_pending" && job.created_at && (() => {
-              const elapsed = Math.floor((Date.now() - new Date(job.created_at).getTime()) / 1000);
+              const ts = job.created_at.endsWith("Z") ? job.created_at : job.created_at + "Z";
+              const elapsed = Math.floor((Date.now() - new Date(ts).getTime()) / 1000);
               const mins = Math.floor(elapsed / 60);
               const hrs = Math.floor(mins / 60);
               const timeStr = hrs > 0 ? `${hrs}h ${mins % 60}m` : `${mins}m`;
@@ -291,23 +292,15 @@ function JobCard({ job, onRefresh, onLightbox }: { job: Job; onRefresh: () => vo
 
                         {/* Before / After thumbnails */}
                         {item.status === "success" && (() => {
-                          const beforeSrc = api.backupUrl(item.item_id, item.image_type);
-                          const afterSrc = item.image_type === "poster"
-                            ? api.posterUrl(item.item_id, "swapped")
-                            : item.image_type === "backdrop"
-                            ? api.backdropUrl(item.item_id, "swapped")
-                            : api.landscapeUrl(item.item_id, "swapped");
-                          const isPoster = item.image_type === "poster";
+                          const beforeSrc = api.backupUrl(item.item_id);
+                          const afterSrc = api.posterUrl(item.item_id, "swapped");
 
                           return (
                             <div className="flex items-center gap-2 mt-2">
                               {/* Before */}
                               <div className="group/thumb relative">
                                 <p className="text-[10px] font-medium uppercase tracking-wider text-[var(--foreground-subtle)] mb-1">Before</p>
-                                <div className={cn(
-                                  "overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-raised)]",
-                                  isPoster ? "h-24 w-16" : "h-16 w-28"
-                                )}>
+                                <div className="overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-raised)] h-24 w-16">
                                   <img src={beforeSrc} alt="Original" className="h-full w-full object-cover" />
                                 </div>
                                 <button
@@ -323,10 +316,7 @@ function JobCard({ job, onRefresh, onLightbox }: { job: Job; onRefresh: () => vo
                               {/* After */}
                               <div className="group/thumb relative">
                                 <p className="text-[10px] font-medium uppercase tracking-wider text-[var(--color-status-success)] mb-1">After</p>
-                                <div className={cn(
-                                  "overflow-hidden rounded-lg border border-[var(--color-status-success)]/30 bg-[var(--surface-raised)]",
-                                  isPoster ? "h-24 w-16" : "h-16 w-28"
-                                )}>
+                                <div className="overflow-hidden rounded-lg border border-[var(--color-status-success)]/30 bg-[var(--surface-raised)] h-24 w-16">
                                   <img src={afterSrc} alt="Swapped" className="h-full w-full object-cover" />
                                 </div>
                                 <button

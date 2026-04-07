@@ -48,29 +48,11 @@ async def get_poster(item_id: str, request: Request):
     return _cached_image_response(request, image_bytes)
 
 
-@router.get("/{item_id}/backdrop")
-async def get_backdrop(item_id: str, request: Request):
-    """Proxy a backdrop image from Jellyfin."""
-    image_bytes = jellyfin.download_image(item_id, "Backdrop/0")
-    if not image_bytes:
-        return Response(content=_EMPTY_PNG, media_type="image/png", headers=_CACHE_HEADERS)
-    return _cached_image_response(request, image_bytes)
-
-
-@router.get("/{item_id}/landscape")
-async def get_landscape(item_id: str, request: Request):
-    """Proxy a landscape/thumb image from Jellyfin."""
-    image_bytes = jellyfin.download_image(item_id, "Thumb")
-    if not image_bytes:
-        return Response(content=_EMPTY_PNG, media_type="image/png", headers=_CACHE_HEADERS)
-    return _cached_image_response(request, image_bytes)
-
-
 @router.get("/{item_id}/backup/{image_type}")
 async def get_backup(item_id: str, image_type: str, request: Request):
     """Serve a backed-up original image."""
-    if image_type not in ("poster", "backdrop", "landscape"):
-        raise HTTPException(status_code=400, detail="image_type must be 'poster', 'backdrop', or 'landscape'")
+    if image_type != "poster":
+        raise HTTPException(status_code=400, detail="image_type must be 'poster'")
 
     backup_bytes = faces_module.get_backup(item_id, image_type)
     if not backup_bytes:
@@ -81,21 +63,18 @@ async def get_backup(item_id: str, image_type: str, request: Request):
 @router.post("/{item_id}/restore")
 async def restore_item(item_id: str, image_type: str = "poster"):
     """Restore an item's original image from backup."""
-    if image_type not in ("poster", "backdrop", "landscape"):
-        raise HTTPException(status_code=400, detail="image_type must be 'poster', 'backdrop', or 'landscape'")
+    if image_type != "poster":
+        raise HTTPException(status_code=400, detail="image_type must be 'poster'")
 
     backup_bytes = faces_module.get_backup(item_id, image_type)
     if not backup_bytes:
         raise HTTPException(status_code=404, detail="No backup found for this item")
 
-    jf_types = {"poster": "Primary", "backdrop": "Backdrop", "landscape": "Thumb"}
-    jellyfin.upload_image(item_id, jf_types[image_type], backup_bytes)
+    jellyfin.upload_image(item_id, "Primary", backup_bytes)
 
     # Update DB status
-    status_cols = {"poster": "poster_status", "backdrop": "backdrop_status", "landscape": "landscape_status"}
-    face_cols = {"poster": "poster_face_id", "backdrop": "backdrop_face_id", "landscape": "landscape_face_id"}
-    status_col = status_cols[image_type]
-    face_col = face_cols[image_type]
+    status_col = "poster_status"
+    face_col = "poster_face_id"
     with get_db() as conn:
         conn.execute(
             f"UPDATE items SET {status_col} = 'original', {face_col} = NULL WHERE id = ?",
@@ -120,13 +99,10 @@ async def restore_bulk(body: RestoreRequest):
                 failed += 1
                 continue
 
-            jf_types = {"poster": "Primary", "backdrop": "Backdrop", "landscape": "Thumb"}
-            jellyfin.upload_image(item_id, jf_types[body.image_type], backup_bytes)
+            jellyfin.upload_image(item_id, "Primary", backup_bytes)
 
-            status_cols = {"poster": "poster_status", "backdrop": "backdrop_status", "landscape": "landscape_status"}
-            face_cols = {"poster": "poster_face_id", "backdrop": "backdrop_face_id", "landscape": "landscape_face_id"}
-            status_col = status_cols[body.image_type]
-            face_col = face_cols[body.image_type]
+            status_col = "poster_status"
+            face_col = "poster_face_id"
             with get_db() as conn:
                 conn.execute(
                     f"UPDATE items SET {status_col} = 'original', {face_col} = NULL WHERE id = ?",

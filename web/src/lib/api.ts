@@ -161,16 +161,8 @@ export function posterUrl(itemId: string, cacheBust?: string) {
   return `${BASE}/items/${itemId}/poster${imageParams(cacheBust ? { v: cacheBust } : undefined)}`;
 }
 
-export function backdropUrl(itemId: string, cacheBust?: string) {
-  return `${BASE}/items/${itemId}/backdrop${imageParams(cacheBust ? { v: cacheBust } : undefined)}`;
-}
-
-export function landscapeUrl(itemId: string, cacheBust?: string) {
-  return `${BASE}/items/${itemId}/landscape${imageParams(cacheBust ? { v: cacheBust } : undefined)}`;
-}
-
-export function backupUrl(itemId: string, imageType: string) {
-  return `${BASE}/items/${itemId}/backup/${imageType}${imageParams()}`;
+export function backupUrl(itemId: string) {
+  return `${BASE}/items/${itemId}/backup/poster${imageParams()}`;
 }
 
 export async function restoreItem(itemId: string, imageType = "poster") {

@@ -1,11 +1,18 @@
 """Jellyfin API client — browse library, download/upload images."""
 
 import base64
+import logging
+import threading
 import time
 
 import requests
 
 from .config import get_settings
+
+log = logging.getLogger("jfswap.jellyfin")
+
+# Limit concurrent Jellyfin I/O to avoid overwhelming the server
+_jf_semaphore = threading.Semaphore(1)
 
 
 def _headers() -> dict:
@@ -79,8 +86,6 @@ def get_movies() -> list[dict]:
             "name": item["Name"],
             "type": "Movie",
             "has_poster": bool(item.get("ImageTags", {}).get("Primary")),
-            "has_backdrop": bool(item.get("BackdropImageTags")),
-            "has_landscape": bool(item.get("ImageTags", {}).get("Thumb")),
             "year": item.get("ProductionYear"),
             "date_added": item.get("DateCreated"),
         }
@@ -104,8 +109,6 @@ def get_series() -> list[dict]:
             "name": item["Name"],
             "type": "Series",
             "has_poster": bool(item.get("ImageTags", {}).get("Primary")),
-            "has_backdrop": bool(item.get("BackdropImageTags")),
-            "has_landscape": bool(item.get("ImageTags", {}).get("Thumb")),
             "year": item.get("ProductionYear"),
             "date_added": item.get("DateCreated"),
         }
@@ -128,8 +131,6 @@ def get_seasons(series_id: str) -> list[dict]:
             "type": "Season",
             "parent_id": series_id,
             "has_poster": bool(item.get("ImageTags", {}).get("Primary")),
-            "has_backdrop": bool(item.get("BackdropImageTags")),
-            "has_landscape": bool(item.get("ImageTags", {}).get("Thumb")),
         }
         for item in items
     ]
@@ -157,19 +158,20 @@ def test_connection() -> dict:
 # ---------------------------------------------------------------------------
 
 def download_image(item_id: str, image_type: str = "Primary") -> bytes | None:
-    """Download an image from Jellyfin. image_type: 'Primary', 'Backdrop/0', or 'Thumb'."""
-    try:
-        r = requests.get(
-            _url(f"/Items/{item_id}/Images/{image_type}"),
-            headers=_headers(),
-            timeout=180,
-        )
-        if r.status_code == 404:
+    """Download an image from Jellyfin."""
+    with _jf_semaphore:
+        try:
+            r = requests.get(
+                _url(f"/Items/{item_id}/Images/{image_type}"),
+                headers=_headers(),
+                timeout=180,
+            )
+            if r.status_code == 404:
+                return None
+            r.raise_for_status()
+            return r.content
+        except requests.RequestException:
             return None
-        r.raise_for_status()
-        return r.content
-    except requests.RequestException:
-        return None
 
 
 # ---------------------------------------------------------------------------
@@ -179,43 +181,27 @@ def download_image(item_id: str, image_type: str = "Primary") -> bytes | None:
 def upload_image(item_id: str, image_type: str, image_bytes: bytes) -> None:
     """Upload an image to Jellyfin via the API.
 
-    image_type: 'Primary', 'Backdrop', or 'Thumb' (landscape).
+    image_type: 'Primary' (poster).
+    Uses semaphore to limit concurrent uploads and retries on failure.
     """
-    api_paths = {"Primary": "Primary", "Backdrop": "Backdrop/0", "Thumb": "Thumb"}
-    image_path = api_paths.get(image_type, image_type)
-
-    # Backdrops: DELETE first, otherwise Jellyfin appends (creates backdrop1.jpg)
-    # If upload fails after delete, restore the original from backup
-    deleted_backdrop = False
-    if image_path == "Backdrop/0":
-        # Download current backdrop as safety net before deleting
-        current = download_image(item_id, "Backdrop/0")
-        requests.delete(
-            _url(f"/Items/{item_id}/Images/Backdrop/0"),
-            headers=_headers(),
-            timeout=180,
-        )
-        deleted_backdrop = True
-
     headers = _headers()
     headers["Content-Type"] = "image/jpeg"
     body = base64.b64encode(image_bytes).decode()
-    try:
-        r = requests.post(
-            _url(f"/Items/{item_id}/Images/{image_path}"),
-            headers=headers,
-            data=body,
-            timeout=180,
-        )
-        r.raise_for_status()
-    except Exception:
-        # Upload failed — restore the original if we deleted the backdrop
-        if deleted_backdrop and current:
-            restore_body = base64.b64encode(current).decode()
-            requests.post(
-                _url(f"/Items/{item_id}/Images/Backdrop/0"),
-                headers={**_headers(), "Content-Type": "image/jpeg"},
-                data=restore_body,
-                timeout=180,
-            )
-        raise
+
+    with _jf_semaphore:
+        for attempt in range(3):
+            try:
+                r = requests.post(
+                    _url(f"/Items/{item_id}/Images/{image_type}"),
+                    headers=headers,
+                    data=body,
+                    timeout=180,
+                )
+                r.raise_for_status()
+                return  # Success
+            except requests.RequestException:
+                if attempt < 2:
+                    log.warning(f"Upload attempt {attempt + 1} failed for {item_id}/{image_type}, retrying...")
+                    time.sleep(2 ** attempt)
+                else:
+                    raise

@@ -11,8 +11,6 @@ import {
   Film,
   Tv,
   Filter,
-  Image,
-  RectangleHorizontal,
   Loader2,
   Check,
   X,
@@ -41,30 +39,9 @@ const STATUS_FILTERS = [
   { value: "failed", label: "Failed" },
 ] as const;
 
-const IMAGE_TYPES = [
-  { key: "poster", label: "Poster", icon: Image },
-  { key: "backdrop", label: "Backdrop", icon: RectangleHorizontal },
-  { key: "landscape", label: "Landscape", icon: RectangleHorizontal },
-] as const;
-
-type ImageType = "poster" | "backdrop" | "landscape";
-
 // Gemini image generation cost (USD per image, from Google pricing)
-// Poster = 1K ($0.067), Backdrop/Landscape = 2K ($0.101)
-const COST_INSTANT: Record<string, number> = { poster: 0.067, backdrop: 0.101, landscape: 0.101 };
-const COST_BATCH: Record<string, number> = { poster: 0.034, backdrop: 0.051, landscape: 0.051 };
-
-function getImageUrl(itemId: string, type: ImageType, status: string) {
-  if (type === "poster") return api.posterUrl(itemId, status);
-  if (type === "backdrop") return api.backdropUrl(itemId, status);
-  return api.landscapeUrl(itemId, status);
-}
-
-function getStatus(item: LibraryItem, type: ImageType) {
-  if (type === "poster") return item.poster_status;
-  if (type === "backdrop") return item.backdrop_status;
-  return item.landscape_status;
-}
+const COST_INSTANT = 0.067;
+const COST_BATCH = 0.034;
 
 /* ------------------------------------------------------------------ */
 /* Mini status dot for individual image thumbnails                    */
@@ -99,34 +76,29 @@ function StatusDot({ status }: { status: string }) {
 /* ------------------------------------------------------------------ */
 function ImageThumb({
   item,
-  type,
-  aspect,
   onExpand,
 }: {
   item: LibraryItem;
-  type: ImageType;
-  aspect: string;
   onExpand: () => void;
 }) {
   const [err, setErr] = useState(false);
-  const status = getStatus(item, type);
 
   return (
-    <div className={cn("group/thumb relative overflow-hidden rounded-lg bg-[var(--surface-raised)]", aspect)}>
+    <div className="group/thumb relative overflow-hidden rounded-lg bg-[var(--surface-raised)] h-full">
       {err ? (
         <div className="flex h-full w-full items-center justify-center">
           <ImageOff className="h-5 w-5 text-[var(--foreground-subtle)]" />
         </div>
       ) : (
         <img
-          src={getImageUrl(item.id, type, status)}
-          alt={`${item.name} ${type}`}
-          className="h-full w-full object-cover"
+          src={api.posterUrl(item.id, item.poster_status)}
+          alt={`${item.name} poster`}
+          className="h-full w-full object-contain"
           loading="lazy"
           onError={() => setErr(true)}
         />
       )}
-      <StatusDot status={status} />
+      <StatusDot status={item.poster_status} />
       {/* Expand button */}
       <button
         onClick={(e) => { e.stopPropagation(); onExpand(); }}
@@ -134,10 +106,6 @@ function ImageThumb({
       >
         <Maximize2 className="h-3 w-3" />
       </button>
-      {/* Label */}
-      <div className="absolute bottom-1 left-1 rounded bg-black/40 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider text-white/70 opacity-0 backdrop-blur-sm transition-opacity group-hover/thumb:opacity-100">
-        {type}
-      </div>
     </div>
   );
 }
@@ -147,21 +115,15 @@ function ImageThumb({
 /* ------------------------------------------------------------------ */
 function TitleCard({
   item,
-  visibleTypes,
   selected,
   onToggle,
   onExpand,
 }: {
   item: LibraryItem;
-  visibleTypes: Set<ImageType>;
   selected: boolean;
   onToggle: (e: React.MouseEvent) => void;
-  onExpand: (type: ImageType) => void;
+  onExpand: () => void;
 }) {
-  const hasPoster = visibleTypes.has("poster");
-  const landscapeTypes = (["backdrop", "landscape"] as const).filter((t) => visibleTypes.has(t));
-  const posterOnly = hasPoster && landscapeTypes.length === 0;
-
   return (
     <motion.div
       layout
@@ -171,7 +133,7 @@ function TitleCard({
       whileHover={{ y: -3 }}
       transition={{ duration: 0.2 }}
       className={cn(
-        "group relative cursor-pointer rounded-[var(--radius-glass)] border transition-all duration-200",
+        "group relative cursor-pointer rounded-[var(--radius-glass)] border transition-all duration-200 flex flex-col h-[300px]",
         selected
           ? "border-[var(--primary)] bg-[var(--primary)]/5 shadow-lg"
           : "border-[var(--border-subtle)] bg-[var(--surface)] hover:border-[var(--border)] hover:shadow-md"
@@ -190,35 +152,13 @@ function TitleCard({
         {selected ? <CheckSquare className="h-4 w-4" /> : <Square className="h-4 w-4" />}
       </div>
 
-      {/* Image layout */}
-      <div className="p-2">
-        {posterOnly ? (
-          /* Poster only — tall card */
-          <ImageThumb item={item} type="poster" aspect="aspect-[2/3]" onExpand={() => onExpand("poster")} />
-        ) : hasPoster ? (
-          /* Poster + landscape(s) — side by side */
-          <div className="flex gap-2">
-            <div className="w-[40%] shrink-0">
-              <ImageThumb item={item} type="poster" aspect="aspect-[2/3]" onExpand={() => onExpand("poster")} />
-            </div>
-            <div className={cn("flex flex-1 flex-col gap-2", landscapeTypes.length === 1 && "justify-center")}>
-              {landscapeTypes.map((t) => (
-                <ImageThumb key={t} item={item} type={t} aspect="aspect-video" onExpand={() => onExpand(t)} />
-              ))}
-            </div>
-          </div>
-        ) : (
-          /* Landscape only */
-          <div className="flex flex-col gap-2">
-            {landscapeTypes.map((t) => (
-              <ImageThumb key={t} item={item} type={t} aspect="aspect-video" onExpand={() => onExpand(t)} />
-            ))}
-          </div>
-        )}
+      {/* Poster */}
+      <div className="p-2 flex-1 min-h-0">
+        <ImageThumb item={item} onExpand={onExpand} />
       </div>
 
       {/* Title bar */}
-      <div className="px-3 pb-2.5 pt-1">
+      <div className="px-3 pb-2.5 pt-1 shrink-0">
         <p className="font-[Outfit] text-sm font-medium leading-tight text-[var(--foreground)] truncate">
           {item.name}
         </p>
@@ -240,15 +180,12 @@ function TitleCard({
 /* ------------------------------------------------------------------ */
 function Lightbox({
   item,
-  imageType,
   onClose,
 }: {
   item: LibraryItem;
-  imageType: ImageType;
   onClose: () => void;
 }) {
-  const status = getStatus(item, imageType);
-  const imgSrc = getImageUrl(item.id, imageType, status);
+  const imgSrc = api.posterUrl(item.id, item.poster_status);
 
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
@@ -275,17 +212,14 @@ function Lightbox({
         <img
           src={imgSrc}
           alt={item.name}
-          className={cn(
-            "rounded-[var(--radius-glass)] shadow-2xl object-contain",
-            imageType === "poster" ? "max-h-[85vh]" : "max-w-[85vw]"
-          )}
+          className="rounded-[var(--radius-glass)] shadow-2xl object-contain max-h-[85vh]"
         />
         <div className="absolute inset-x-0 bottom-0 rounded-b-[var(--radius-glass)] bg-gradient-to-t from-black/80 to-transparent p-4 pt-12">
           <p className="font-[Outfit] text-xl font-semibold text-white drop-shadow-lg">{item.name}</p>
           <div className="mt-1 flex items-center gap-2 text-sm text-white/60">
             <span>{item.type}</span>
             {item.year && <span>· {item.year}</span>}
-            <span>· {imageType} · {status}</span>
+            <span>· {item.poster_status}</span>
           </div>
         </div>
         <button
@@ -307,21 +241,17 @@ function Lightbox({
 /* ------------------------------------------------------------------ */
 function VirtualGrid({
   items,
-  posterOnly,
-  visibleTypes,
   selected,
   onToggle,
   onExpand,
 }: {
   items: LibraryItem[];
-  posterOnly: boolean;
-  visibleTypes: Set<ImageType>;
   selected: Set<string>;
   onToggle: (index: number, e: React.MouseEvent) => void;
-  onExpand: (item: LibraryItem, type: ImageType) => void;
+  onExpand: (item: LibraryItem) => void;
 }) {
   const parentRef = useRef<HTMLDivElement>(null);
-  const minCardWidth = posterOnly ? 150 : 300;
+  const minCardWidth = 150;
   const gap = 16;
 
   // Calculate columns based on container width
@@ -338,7 +268,7 @@ function VirtualGrid({
   }, [minCardWidth]);
 
   const rowCount = Math.ceil(items.length / cols);
-  const rowHeight = posterOnly ? 320 : 260;
+  const rowHeight = 320;
 
   const virtualizer = useVirtualizer({
     count: rowCount,
@@ -385,10 +315,9 @@ function VirtualGrid({
                   <TitleCard
                     key={item.id}
                     item={item}
-                    visibleTypes={visibleTypes}
                     selected={selected.has(item.id)}
                     onToggle={(e) => onToggle(idx, e)}
-                    onExpand={(type) => onExpand(item, type)}
+                    onExpand={() => onExpand(item)}
                   />
                 );
               })}
@@ -427,26 +356,13 @@ export default function Library() {
   const [statusFilter, setStatusFilter] = useStickyState("lib-status", "");
   const [sortBy, setSortBy] = useStickyState("lib-sort", "date_added");
   const [sortOrder, setSortOrder] = useStickyState("lib-order", "desc");
-  const [visibleTypesArr, setVisibleTypesArr] = useStickyState<ImageType[]>("lib-visibleTypes", ["poster", "backdrop"]);
-  const visibleTypes = new Set(visibleTypesArr);
-
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [syncing, setSyncing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
-  const [lightbox, setLightbox] = useState<{ item: LibraryItem; type: ImageType } | null>(null);
+  const [lightbox, setLightbox] = useState<LibraryItem | null>(null);
   const [confirmJob, setConfirmJob] = useState<{ mode: "instant" | "batch" } | null>(null);
   const lastToggleIndex = useRef<number>(-1);
-
-  const toggleVisibleType = (type: ImageType) => {
-    const next = new Set(visibleTypes);
-    if (next.has(type)) {
-      if (next.size > 1) next.delete(type); // keep at least one
-    } else {
-      next.add(type);
-    }
-    setVisibleTypesArr(Array.from(next));
-  };
 
   const itemsRef = useRef<string>("");
   const fetchItems = useCallback(async () => {
@@ -461,7 +377,7 @@ export default function Library() {
         limit: 10000,
       });
       // Only update state if data actually changed (prevents grid re-render flicker during polling)
-      const key = JSON.stringify(data.items.map((i) => `${i.id}:${i.poster_status}:${i.backdrop_status}:${i.landscape_status}`));
+      const key = JSON.stringify(data.items.map((i) => `${i.id}:${i.poster_status}`));
       if (key !== itemsRef.current) {
         itemsRef.current = key;
         setItems(data.items);
@@ -531,7 +447,7 @@ export default function Library() {
       await api.createJob({
         item_ids: Array.from(selected),
         mode,
-        image_type: visibleTypesArr.join(","),
+        image_type: "poster",
       });
       setSelected(new Set());
 
@@ -550,27 +466,8 @@ export default function Library() {
     }
   };
 
-  const posterOnly = visibleTypes.has("poster") && visibleTypes.size === 1;
-
-  // Client-side status filtering based on visible image types
-  const getVisibleStatuses = (item: LibraryItem): string[] => {
-    const statuses: string[] = [];
-    if (visibleTypes.has("poster")) statuses.push(item.poster_status);
-    if (visibleTypes.has("backdrop")) statuses.push(item.backdrop_status);
-    if (visibleTypes.has("landscape")) statuses.push(item.landscape_status);
-    return statuses;
-  };
-
   const filteredItems = statusFilter
-    ? items.filter((item) => {
-        const statuses = getVisibleStatuses(item);
-        if (statusFilter === "original") {
-          // Show only if ALL visible types are original
-          return statuses.every((s) => s === "original");
-        }
-        // Show if ANY visible type matches the filter
-        return statuses.some((s) => s === statusFilter);
-      })
+    ? items.filter((item) => item.poster_status === statusFilter)
     : items;
 
   return (
@@ -686,26 +583,6 @@ export default function Library() {
           ))}
         </div>
 
-        <div className="h-6 w-px bg-[var(--border)]" />
-
-        {/* Image type multi-select */}
-        <div className="flex gap-1 rounded-full border border-[var(--border)] p-0.5">
-          {IMAGE_TYPES.map(({ key, label, icon: Icon }) => (
-            <button
-              key={key}
-              onClick={() => toggleVisibleType(key)}
-              className={cn(
-                "inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition-all duration-200",
-                visibleTypes.has(key)
-                  ? "bg-[var(--primary)] text-[var(--primary-foreground)]"
-                  : "text-[var(--foreground-muted)] hover:text-[var(--foreground)]"
-              )}
-            >
-              <Icon className="h-3 w-3" />
-              {label}
-            </button>
-          ))}
-        </div>
       </div>
 
       {/* Action bar */}
@@ -718,16 +595,12 @@ export default function Library() {
             className="glass-strong flex items-center gap-3 rounded-[var(--radius-glass)] px-4 py-3"
           >
             {(() => {
-              const totalImages = selected.size * visibleTypesArr.length;
-              const instantCost = (selected.size * visibleTypesArr.reduce((sum, t) => sum + (COST_INSTANT[t] ?? 0.067), 0)).toFixed(2);
-              const batchCost = (selected.size * visibleTypesArr.reduce((sum, t) => sum + (COST_BATCH[t] ?? 0.034), 0)).toFixed(2);
+              const instantCost = (selected.size * COST_INSTANT).toFixed(2);
+              const batchCost = (selected.size * COST_BATCH).toFixed(2);
               return (
                 <>
                   <span className="text-sm font-medium text-[var(--foreground)]">
-                    {selected.size} title{selected.size !== 1 ? "s" : ""} &middot; {totalImages} image{totalImages !== 1 ? "s" : ""}
-                  </span>
-                  <span className="text-xs text-[var(--foreground-muted)]">
-                    ({visibleTypesArr.join(" + ")})
+                    {selected.size} poster{selected.size !== 1 ? "s" : ""}
                   </span>
 
                   <div className="ml-auto flex gap-2">
@@ -777,20 +650,18 @@ export default function Library() {
       ) : (
         <VirtualGrid
           items={filteredItems}
-          posterOnly={posterOnly}
-          visibleTypes={visibleTypes}
           selected={selected}
           onToggle={toggleItem}
-          onExpand={(item, type) => setLightbox({ item, type })}
+          onExpand={(item) => setLightbox(item)}
         />
       )}
 
       {/* Confirmation dialog */}
       <AnimatePresence>
         {confirmJob && (() => {
-          const totalImages = selected.size * visibleTypesArr.length;
-          const costMap = confirmJob.mode === "instant" ? COST_INSTANT : COST_BATCH;
-          const totalCost = selected.size * visibleTypesArr.reduce((sum, t) => sum + (costMap[t] ?? 0.067), 0);
+          const totalImages = selected.size;
+          const costPerImage = confirmJob.mode === "instant" ? COST_INSTANT : COST_BATCH;
+          const totalCost = selected.size * costPerImage;
           const timeEstimate = confirmJob.mode === "instant"
             ? (() => {
                 // ~20s per image, 10 concurrent workers → ~30 images/min
@@ -824,11 +695,7 @@ export default function Library() {
                     <span className="text-[var(--foreground)]">{selected.size}</span>
                   </div>
                   <div className="flex justify-between text-sm">
-                    <span className="text-[var(--foreground-muted)]">Image types</span>
-                    <span className="text-[var(--foreground)]">{visibleTypesArr.join(", ")}</span>
-                  </div>
-                  <div className="flex justify-between text-sm">
-                    <span className="text-[var(--foreground-muted)]">Total images</span>
+                    <span className="text-[var(--foreground-muted)]">Posters</span>
                     <span className="text-[var(--foreground)]">{totalImages}</span>
                   </div>
                   <div className="h-px bg-[var(--border)]" />
@@ -885,8 +752,7 @@ export default function Library() {
       <AnimatePresence>
         {lightbox && (
           <Lightbox
-            item={lightbox.item}
-            imageType={lightbox.type}
+            item={lightbox}
             onClose={() => setLightbox(null)}
           />
         )}

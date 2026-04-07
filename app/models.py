@@ -14,14 +14,8 @@ class LibraryItem(BaseModel):
     type: str  # Movie, Series, Season
     parent_id: Optional[str] = None
     has_poster: bool = False
-    has_backdrop: bool = False
-    has_landscape: bool = False
     poster_status: str = "original"
-    backdrop_status: str = "original"
-    landscape_status: str = "original"
     poster_face_id: Optional[int] = None
-    backdrop_face_id: Optional[int] = None
-    landscape_face_id: Optional[int] = None
     year: Optional[int] = None
     last_synced: Optional[datetime] = None
 
