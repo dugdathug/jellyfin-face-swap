@@ -1,0 +1,10 @@
+fastapi>=0.115
+uvicorn[standard]>=0.30
+google-genai>=1.0
+Pillow>=10.0
+requests>=2.31
+pydantic>=2.0
+
+# Optional backends (uncomment if using)
+# anthropic>=0.40
+# fal-client>=0.5

@@ -1,0 +1,28 @@
+# Environment
+.env
+
+# Runtime data
+data/faces/*.jpg
+data/faces/*.jpeg
+data/faces/*.png
+data/faces/*.webp
+data/backups/
+data/batches/
+data/*.db
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Node
+web/node_modules/
+web/dist/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
