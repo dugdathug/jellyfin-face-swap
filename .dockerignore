@@ -1,0 +1,12 @@
+.env
+data/
+__pycache__/
+*.pyc
+web/node_modules/
+web/dist/
+.git/
+.vscode/
+.idea/
+screenshots/
+*.md
+LICENSE
