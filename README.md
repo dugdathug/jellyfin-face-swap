@@ -173,7 +173,7 @@ The web interface lets you browse your library, select titles, and swap faces wi
 ### Face Swap
 
 - **Instant mode** — process items concurrently with real-time progress (~20 posters per minute)
-- **Batch mode** — submit to Google's Batch API at **50% cost**, results applied automatically (typically under an hour)
+- **Batch mode** — submit to Google's Batch API at **50% cost**, results applied automatically (may take up to 24 hours)
 
 ### Jobs
 
